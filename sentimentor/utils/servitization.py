@@ -51,15 +51,14 @@ class HF2TFClassifierPredictor(tf.Module):
 
 ##################################### Seq2Seq #####################################
 
-def print_seq2seq(sentence, tokens, ground_truth=None):
+def print_seq2seq(sentence, prediction, ground_truth=None):
     print(f'{"Input:":15s}: {sentence}')
-    print(f'{"Prediction":15s}: {tokens.numpy().decode("utf-8")}')
+    print(f'{"Prediction":15s}: {prediction.numpy().decode("utf-8")}')
     if ground_truth:
         print(f'{"Ground truth":15s}: {ground_truth}')
         
 class Seq2SeqPredictor(tf.Module):
-    def __init__(self, model, tokenizers, preprocessors, lang_pair):
-        self.inp_lang, self.tar_lang = lang_pair
+    def __init__(self, model, tokenizers, preprocessors):
         self.preprocessors = preprocessors
         self.tokenizers = tokenizers
         self.model = model
@@ -70,17 +69,15 @@ class Seq2SeqPredictor(tf.Module):
             sentence = sentence[tf.newaxis]
         
         # Preprocessing
-        sentence = self.preprocessors[self.inp_lang](sentence)
+        sentence = self.preprocessors['inp'](sentence)
 
         # Tokenization
-        sentence = getattr(self.tokenizers, self.inp_lang).tokenize(sentence).to_tensor()
+        encoder_input = self.tokenizers.inp.tokenize(sentence).to_tensor()
         
-        encoder_input = sentence
-
         # Setup the first and the last
-        start_end = getattr(self.tokenizers, self.tar_lang).tokenize([''])[0]
+        start_end = self.tokenizers.tar.tokenize([''])[0]
         start = start_end[0][tf.newaxis]
-        end = start_end[1][tf.newaxis]
+        end   = start_end[1][tf.newaxis]
 
         # `tf.TensorArray` is required here (instead of a python list) so that the
         # dynamic-loop can be traced by `tf.function`.
@@ -107,12 +104,12 @@ class Seq2SeqPredictor(tf.Module):
         output = tf.transpose(output_array.stack()) # output.shape (1, tokens)
         
         # Detokenization
-        text = getattr(self.tokenizers, self.tar_lang).detokenize(output)[0]
-        tokens = getattr(self.tokenizers, self.tar_lang).lookup(output)[0]
+        text = self.tokenizers.tar.detokenize(output)[0]
+        tokens = self.tokenizers.tar.lookup(output)[0]
         
         # Postprocessing
-        text = self.preprocessors[self.tar_lang](text)
-        tokens = self.preprocessors[self.tar_lang](tokens)
+        text = self.preprocessors['tar'](text)
+        tokens = self.preprocessors['tar'](tokens)
         
         # `tf.function` prevents us from using the attention_weights that were
         # calculated on the last iteration of the loop. So recalculate them outside

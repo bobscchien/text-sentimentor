@@ -100,20 +100,18 @@ def make_batches(dataset, batch_size=64, buffer_size=None, cache=True,
     
     return dataset
 
-def make_custom_token_pair_batches(dataset, tokenizers, lang_pair, max_length=None, 
+def make_custom_token_pair_batches(dataset, tokenizers, max_lengths=None, 
                                    batch_size=64, buffer_size=None, cache=True):
 
-    inp_lang, tar_lang = lang_pair
-    
     def tokenize_pairs(inp, tar):
         # Convert from ragged to dense, padding with zeros.
-        inp = getattr(tokenizers, inp_lang).tokenize(inp)
-        tar = getattr(tokenizers, tar_lang).tokenize(tar)
+        inp = tokenizers.inp.tokenize(inp)
+        tar = tokenizers.tar.tokenize(tar)
         
         # Truncate sentence
-        if max_length:
-            inp = inp[:, :max_length]
-            tar = tar[:, :max_length]
+        if max_lengths:
+            inp = inp[:, :max_lengths['inp']]
+            tar = tar[:, :max_lengths['tar']]
 
         # Pad sentence
         return tf.cast(inp, dtype=tf.int32).to_tensor(), tf.cast(tar, dtype=tf.int32).to_tensor()

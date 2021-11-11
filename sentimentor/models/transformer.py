@@ -6,6 +6,7 @@ from official.nlp import modeling      # to use beam search (ops/beam_search.py)
 from official.nlp import optimization  # to create AdamW optimizer
 
 
+
 ###################################################################################
 #################################### Callbacks ####################################
 ###################################################################################
@@ -368,3 +369,63 @@ class Transformer(tf.keras.Model):
 
         return outputs, attention_weights
     
+###################################################################################
+###################################### Record #####################################
+###################################################################################
+
+""" 
+This test_step is inspired by the export format of model, 
+but is now replaced by beam search or other sampling methods
+
+@tf.function(input_signature=input_signature)
+def test_step(dataset):
+    inp, tar = dataset
+    
+    tar_real = tar[:, 1:]
+
+    # Define the max_length of sentences
+    max_length = tar.shape[1]
+    
+    # Setup the first and the last
+    start = tf.math.multiply(BOS_IDS['tar'], tf.ones_like(tar[:, 0]))
+    end   = tf.math.multiply(EOS_IDS['tar'], tf.ones_like(tar[:, 0]))
+        
+    # `tf.TensorArray` is required here (instead of a python list) so that the
+    # dynamic-loop can be traced by `tf.function`.
+    logits_array = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
+    output_array = tf.TensorArray(dtype=tf.int32, size=0, dynamic_size=True)
+    output_array = output_array.write(0, start)
+        
+    # tf.while_loop
+    # https://www.tensorflow.org/probability/examples/Estimating_COVID_19_in_11_European_countries
+    i = tf.constant(0)
+    cond = lambda i, *_: tf.less(i, max_length)
+    
+    def body(i, logits_array, output_array):
+        output = tf.transpose(output_array.stack())
+        predictions, _ = model([inp, output], training=False)
+
+        # select the last token from the seq_len dimension
+        predictions = predictions[:, -1:]  # (batch_size, 1, vocab_size)
+ 
+        # Beam Search or Greedy Search
+        predicted_id = tf.argmax(predictions, axis=-1, output_type=tf.int32)[:, 0]
+ 
+        # concatentate the predicted_id to the output which is given to the TransformerDecoder
+        # as its input.
+        logits_array = logits_array.write(i, predictions[:, -1])
+        output_array = output_array.write(i+1, predicted_id)
+        
+        return [tf.add(i, 1), logits_array, output_array]
+    
+    _, logits_array, output_array = tf.while_loop(cond, body, [i, logits_array, output_array])
+    
+    tar_pred = tf.transpose(logits_array.stack(), perm=[1, 0, 2])[:, 1:]
+    tar_pred_ids = tf.transpose(output_array.stack())
+
+    loss = loss_function(tar_real, tar_pred)
+
+    # Track progress
+    valid_loss(loss)
+    valid_accuracy(accuracy_function(tar_real, tar_pred))
+"""
