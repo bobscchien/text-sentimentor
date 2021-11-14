@@ -1,2 +1,9 @@
-有1~4星
+# Reference
+https://www.tensorflow.org/text/tutorials/classify_text_with_bert
+https://colab.research.google.com/drive/1yWaLpCWImXZE2fPV0ZYDdWWI8f52__9A#scrollTo=EhpauvOIJzzf
+https://colab.research.google.com/drive/1l39vWjZ5jRUimSQDoUcuWGIoNjLjA2zu
+
+# Dataset: 
+
+s1 star to 4 stars
 https://www.tensorflow.org/datasets/catalog/yelp_polarity_reviews?hl=zh-tw
