@@ -26,20 +26,23 @@ config.read(config_file)
 
 ### Configuration
 
+PROJECT_NAME = config['path']['PROJECT_NAME']
+DIR_DATA_TOP = config['path']['DIR_DATA_TOP']
+
 # Define Directories
 
-DIR_MODELTENSOR = config['path']['DIR_MODELTENSOR']
-DIR_MODELTORCH  = config['path']['DIR_MODELTORCH']
+DIR_MODELTENSOR = os.path.join(DIR_DATA_TOP, 'Model_Tensorflow')
+DIR_MODELTORCH  = os.path.join(DIR_DATA_TOP, 'Model_Pytorch')
 
-DIR_VOCAB = config['path']['DIR_VOCAB']
-DIR_TOKEN = config['path']['DIR_TOKEN']
+DIR_VOCAB      = os.path.join(DIR_DATA_TOP, 'Text_Tokenizer', 'vocab')
+DIR_TOKEN      = os.path.join(DIR_DATA_TOP, 'Text_Tokenizer', 'trained')
 
-DIR_DATA = config['path']['DIR_DATA']
-DIR_TFRECORD = config['path']['DIR_TFRECORD']
-DIR_MODEL = config['path']['DIR_MODEL']
-DIR_CHECKPOINT = config['path']['DIR_CHECKPOINT']
-DIR_LOG = config['path']['DIR_LOG']
-DIR_TMP = config['path']['DIR_TMP']
+DIR_DATA       = os.path.join(DIR_DATA_TOP, PROJECT_NAME, 'dataset')
+DIR_TFRECORD   = os.path.join(DIR_DATA_TOP, PROJECT_NAME, 'datatf')
+DIR_MODEL      = os.path.join(DIR_DATA_TOP, PROJECT_NAME, 'model', 'savedmodels')
+DIR_CHECKPOINT = os.path.join(DIR_DATA_TOP, PROJECT_NAME, 'model', 'checkpoints')
+DIR_LOG        = os.path.join(DIR_DATA_TOP, PROJECT_NAME, 'model', 'logs')
+DIR_TMP        = os.path.join(DIR_DATA_TOP, PROJECT_NAME, 'tmp')
 
 # Setup Directories
 
@@ -50,7 +53,7 @@ for key, value in DIRs.items():
             print(f"Directory {value} exists.")
         else:
             print(f"Creating {value}...")
-            os.mkdir(value)
+            os.makedirs(value)
             print(f" Succeeded!!!")
             
 # Global Variables
