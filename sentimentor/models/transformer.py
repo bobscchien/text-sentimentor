@@ -4,8 +4,7 @@ import tensorflow as tf
 import official
 from official.nlp import modeling      # to use beam search (ops/beam_search.py), top-k/p sampling (ops/sampling_module) or built layers
 from official.nlp import optimization  # to create AdamW optimizer
-
-
+from official.nlp.metrics import bleu as bleu_metric
 
 ###################################################################################
 #################################### Callbacks ####################################
@@ -39,7 +38,7 @@ def accuracy_function(real, pred):
     mask = tf.cast(mask, dtype=tf.float32)
     return tf.reduce_sum(accuracies)/tf.reduce_sum(mask)
 
-### Optimization
+### Optimization: can be replaced via tf-offical-models
 
 class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
     def __init__(self, embed_dim, warmup_steps=4000):
@@ -369,13 +368,21 @@ class Transformer(tf.keras.Model):
 
         return outputs, attention_weights
     
+    # The most convenient method to print model.summary() 
+    # similar to the sequential or functional API like.
+    def build_graph(self):
+        inp_ids = tf.keras.layers.Input(shape=(None,), name='input_ids', dtype='int32')
+        tar_ids = tf.keras.layers.Input(shape=(None,), name='target_ids', dtype='int32')
+        
+        return tf.keras.Model(inputs=[inp_ids, tar_ids], outputs=self.call([inp_ids, tar_ids]))    
+    
 ###################################################################################
 ###################################### Record #####################################
 ###################################################################################
 
 """ 
 This test_step is inspired by the export format of model, 
-but is now replaced by beam search or other sampling methods
+but is now replaced by beam search and other sampling methods
 
 @tf.function(input_signature=input_signature)
 def test_step(dataset):
