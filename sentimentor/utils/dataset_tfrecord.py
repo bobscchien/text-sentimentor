@@ -1,3 +1,5 @@
+import os
+import tqdm
 import functools
 from .dataset_pipeline import *
 
@@ -45,9 +47,10 @@ def saveTFRecord(name, dir_tfrecord, dataset, shard=1):
 
 def parse_example(example_proto, max_lengths, labeled=True):
     # Create a dictionary describing the features.
+    # Reference: https://www.google.com/search?q=tf.io.FixedLenSequenceFeature(&oq=tf.io.FixedLenSequenceFeature(&aqs=chrome..69i57&sourceid=chrome&ie=UTF-8
     feature_description = {
-        'inp_input_ids':tf.io.FixedLenFeature([max_lengths['inp']], tf.int64),
-        'inp_attention_mask':tf.io.FixedLenFeature([max_lengths['inp']], tf.int64),
+        'inp_input_ids':tf.io.FixedLenSequenceFeature([], tf.int64, allow_missing=True),
+        'inp_attention_mask':tf.io.FixedLenSequenceFeature([], tf.int64, allow_missing=True),
         'labels':tf.io.FixedLenFeature([1], tf.int64)
     }
 
