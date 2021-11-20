@@ -20,7 +20,7 @@ valid_accuracy = tf.keras.metrics.Mean(name='val_accuracy')
 loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
 
 def loss_function(real, pred):
-    mask = tf.math.logical_not(tf.math.equal(real, 0))
+    mask = tf.math.not_equal(real, 0)
     loss_ = loss_object(real, pred)
 
     mask = tf.cast(mask, dtype=loss_.dtype)
@@ -31,11 +31,12 @@ def loss_function(real, pred):
 def accuracy_function(real, pred):
     accuracies = tf.equal(real, tf.argmax(pred, axis=2, output_type=tf.int32))
 
-    mask = tf.math.logical_not(tf.math.equal(real, 0))
+    mask = tf.math.not_equal(real, 0)
     accuracies = tf.math.logical_and(mask, accuracies)
 
-    accuracies = tf.cast(accuracies, dtype=tf.float32)
     mask = tf.cast(mask, dtype=tf.float32)
+    accuracies = tf.cast(accuracies, dtype=tf.float32)
+    
     return tf.reduce_sum(accuracies)/tf.reduce_sum(mask)
 
 ### Optimization: can be replaced via tf-offical-models

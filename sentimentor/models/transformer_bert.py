@@ -76,20 +76,19 @@ class EmbeddingProjector(tf.keras.layers.Layer):
 ### TransformerEncoder
 
 class BertTransformerEncoder(tf.keras.Model):
-    def __init__(self, bert_names, configs, cache_dirs, all_tune, num_projection_layers, use_lstm, nn_units, 
+    def __init__(self, inp_pretrained_model, num_tune, num_projection_layers, use_lstm, nn_units, 
                  num_layers, embed_dim, num_heads, dense_dim, num_classes, activation='relu', dropout=0.1):
         super().__init__()
         
+        self.num_tune = num_tune
         self.use_lstm = use_lstm
         self.nn_units = nn_units
         
         ### Load pretrained bert model
 
-        self.inp_pretrained_model = TFAutoModel.from_pretrained(bert_names['inp'], 
-                                                                config=configs['inp'], 
-                                                                cache_dir=cache_dirs['inp'])
-        self.embedding_projector = EmbeddingProjector(num_projection_layers, embed_dim, 
-                                                      activation=activation, dropout=dropout)
+        self.inp_pretrained_model = inp_pretrained_model
+        self.embedding_projector  = EmbeddingProjector(num_projection_layers, embed_dim, 
+                                                       activation=activation, dropout=dropout)
         
         ### Build the downstream model
         
@@ -110,15 +109,15 @@ class BertTransformerEncoder(tf.keras.Model):
         self.final_layer = tf.keras.layers.Dense(num_classes, activation=None)
         
         # Whether the fine-tune process including the pretrained model
-        for layer in self.inp_pretrained_model.layers:
-            layer.trainable = all_tune
+        for layer in self.inp_pretrained_model.layers[-self.num_tune:]:
+            layer.trainable = bool(self.num_tune)
             
     def call(self, inputs, training=None):
         # Keras models prefer if you pass all your inputs in the first argument
         inp, inp_mask = inputs
                     
         # Bert Embedding 
-        inp_embedded = self.inp_pretrained_model(inp, attention_mask=inp_mask, training=training)[0]
+        inp_embedded = self.inp_pretrained_model(inp, attention_mask=inp_mask, training=False)[0]
         inp_embedded = self.embedding_projector(inp_embedded, training=training)
 
         # Encoder
@@ -147,18 +146,18 @@ class BertTransformerEncoder(tf.keras.Model):
 ### Transformer
 
 class BertEncoderTransformer(tf.keras.Model):
-    def __init__(self, bert_names, configs, cache_dirs, all_tune, num_projection_layers, 
+    def __init__(self, inp_pretrained_model, num_tune, num_projection_layers, 
                  num_enc_layers, num_dec_layers, embed_dim, num_heads, dense_dim, 
                  target_vocab_size, pe_target, activation='relu', dropout=0.1, embed_pos=False):
         super().__init__()
         
+        self.num_tune = num_tune
+
         ### Load pretrained bert model
 
-        self.inp_pretrained_model = TFAutoModel.from_pretrained(bert_names['inp'], 
-                                                                config=configs['inp'], 
-                                                                cache_dir=cache_dirs['inp'])
-        self.embedding_projector = EmbeddingProjector(num_projection_layers, embed_dim, 
-                                                      activation=activation, dropout=dropout)
+        self.inp_pretrained_model = inp_pretrained_model
+        self.embedding_projector  = EmbeddingProjector(num_projection_layers, embed_dim, 
+                                                       activation=activation, dropout=dropout)
         
         ### Build the downstream model
         
@@ -171,8 +170,8 @@ class BertEncoderTransformer(tf.keras.Model):
         self.final_layer = tf.keras.layers.Dense(target_vocab_size)
         
         # Whether the fine-tune process including the pretrained model
-        for layer in self.inp_pretrained_model.layers:
-            layer.trainable = all_tune
+        for layer in self.inp_pretrained_model.layers[-self.num_tune:]:
+            layer.trainable = bool(self.num_tune)
             
     def call(self, inputs, training=None):
         # Keras models prefer if you pass all your inputs in the first argument
