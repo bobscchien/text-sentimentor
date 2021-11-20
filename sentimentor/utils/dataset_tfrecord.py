@@ -25,16 +25,15 @@ def saveTFRecord(name, dir_tfrecord, dataset, shard=1):
     texts, labels = dataset
     
     amount = len(labels)
+    
+    # To make every shard have the same amount of data
     sample = amount//shard 
+    amount = sample * shard
     
     count = 0
     for n in tqdm.tqdm(range(shard)):
         # Write the `tf.train.Example` observations to the file.
-        filename = os.path.join(dir_tfrecord, f'{name}{n}.tfrecord')
-        
-        # The last file will be slightly bigger than the other files
-        if amount - (count+sample) < sample:
-            sample += amount - (count + sample)
+        filename = os.path.join(dir_tfrecord, f'{name}{n}-{amount}.tfrecord')
 
         with tf.io.TFRecordWriter(filename) as writer:
             for i in range(count, count+sample):
@@ -88,6 +87,6 @@ def loadTFRecord(filename, dir_tfrecord, batch_size=64, shuffle_size=None, cache
     if shuffle_size:
         dataset = dataset.shuffle(shuffle_size)
         
-    dataset = dataset.batch(batch_size)
+    dataset = dataset.batch(batch_size, drop_remainder=True)
     dataset = dataset.prefetch(buffer_size=AUTOTUNE)
     return dataset
