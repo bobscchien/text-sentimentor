@@ -27,9 +27,14 @@ def plot_attention_head(in_tokens, translated_tokens, attention):
     
 def plot_attention_weights(sentence, translated_tokens, attention_heads, tokenizers):
     
-    in_tokens = tf.convert_to_tensor([sentence])
-    in_tokens = tokenizers.inp.tokenize(in_tokens).to_tensor()
-    in_tokens = tokenizers.inp.lookup(in_tokens)[0]
+    try:
+        in_tokens = tf.convert_to_tensor([sentence])
+        in_tokens = tokenizers.inp.tokenize(in_tokens).to_tensor()
+        in_tokens = tokenizers.inp.lookup(in_tokens)[0]
+    except:
+        in_tokens = tokenizers.inp.tokenize(sentence, add_special_tokens=True)
+        in_tokens = tf.convert_to_tensor(in_tokens)
+        translated_tokens = tf.convert_to_tensor(translated_tokens)
 
     heads = len(attention_heads)
     rows = math.ceil(heads/4)
@@ -45,4 +50,3 @@ def plot_attention_weights(sentence, translated_tokens, attention_heads, tokeniz
 
     plt.tight_layout()
     plt.show()
-    
