@@ -8,11 +8,44 @@ from .decoding import *
 
 #################################### Classifier ###################################
 
+class HF2TFSingleClassifierExporter(tf.Module):
+    """ 
+    Save the fine-tuned Hugging Face model with detail information, 
+    and should be modified based on the model's inputs.    
+    """
+    def __init__(self, model, bert_names, config_detail, num_classes, inp_lang='', tar_lang=''):
+        self.model = model
+        self.num_classes = num_classes
+        self.config_detail = tf.Variable(config_detail)
+        
+        self.inp_bert = tf.Variable(bert_names['inp'] or '')        
+        self.tar_bert = tf.Variable(bert_names['tar'] or '')        
+        self.inp_lang = tf.Variable(inp_lang)
+        self.tar_lang = tf.Variable(tar_lang)     
+
+    # Notice: the input should be encoded as token_ids and masks, 
+    # and the signature need to be adjusted based on the number of masks
+    @tf.function(input_signature=[[tf.TensorSpec(shape=[None, None], dtype=tf.int32),
+                                   tf.TensorSpec(shape=[None, None], dtype=tf.int32)], 
+                                  tf.TensorSpec(shape=[], dtype=tf.bool)])
+    def __call__(self, inputs, return_prob=True):        
+        outputs = self.model(inputs, training=False)
+        
+        # Multiclass Problem
+        if self.num_classes <= 2:
+            outputs = tf.nn.sigmoid(outputs)
+        else:
+            outputs = tf.nn.softmax(outputs)
+            if not return_prob:
+                outputs = tf.math.argmax(outputs, axis=-1) + 1
+
+        return outputs
+    
 class HF2TFClassifierPipeline(tf.Module):
-    def __init__(self, model_dir, pretrain_dir, preprocessors=None, max_length=256, tokenizer_params={}):
-        self.model = tf.saved_model.load(model_dir)
-        self.inp_lang = self.model.inp_lang.numpy().decode()        
-        self.inp_bert = self.model.inp_bert.numpy().decode()        
+    def __init__(self, predictor_dir, pretrain_dir, preprocessors=None, tokenizer_params={}):
+        self.predictor = tf.saved_model.load(predictor_dir)
+        self.inp_lang = self.predictor.inp_lang.numpy().decode()        
+        self.inp_bert = self.predictor.inp_bert.numpy().decode()        
         self.preprocessors = preprocessors
         
         self.bert_dir = os.path.join(pretrain_dir, self.inp_bert)
@@ -20,14 +53,17 @@ class HF2TFClassifierPipeline(tf.Module):
         self.bert_tokenizer = AutoTokenizer.from_pretrained(self.inp_bert, cache_dir=self.bert_dir, do_lower_case=True)
         self.bert_tokenizer_params = {
             'add_special_tokens':True, 
-            'padding':True, 'truncation':True, 'max_length':max_length, 
+            'padding':True, 'truncation':True, 
             'return_attention_mask':True, 'return_token_type_ids':False
         }
         # e.g. return_token_type_ids = True for multi-sentence problems
         for k, v in tokenizer_params.items():
             self.bert_tokenizer_params[k] = v
         
-    def __call__(self, sentence1, sentence2=None, return_prob=True):
+    def __call__(self, sentence1, sentence2=None, max_length=256, return_prob=True):
+        # Set the maxmium length of input sentence
+        self.bert_tokenizer_params['max_length'] = max_length
+        
         # Preprocessing : bert tokenizer cannot accept byte format so we should set py_function=True
         if self.preprocessors:
             sentence1 = self.preprocessors['inp'](sentence1, py_function=True)
@@ -38,14 +74,119 @@ class HF2TFClassifierPipeline(tf.Module):
         if self.bert_tokenizer_params['return_token_type_ids']:
             tokens = self.bert_tokenizer(sentence1, sentence2, return_tensors='tf', **self.bert_tokenizer_params)
             # Two sentences
-            outputs = self.model([tokens['input_ids'], tokens['attention_mask'], tokens['token_type_ids']], return_prob=return_prob)
+            outputs = self.predictor([tokens['input_ids'], tokens['attention_mask'], tokens['token_type_ids']], 
+                                     return_prob=tf.constant(return_prob))
         else:
             tokens = self.bert_tokenizer(sentence1, return_tensors='tf', **self.bert_tokenizer_params)            
             # One Sentence
-            outputs = self.model([tokens['input_ids'], tokens['attention_mask']], return_prob=return_prob)
+            outputs = self.predictor([tokens['input_ids'], tokens['attention_mask']], 
+                                     return_prob=tf.constant(return_prob))
 
         return outputs
 
+##################################### Seq2Seq #####################################
+
+class HF2TFSeq2SeqExporter(tf.Module):
+    """ 
+    Save the fine-tuned Hugging Face model with detail information, 
+    and should be modified based on the model's inputs.    
+    """
+    def __init__(self, model, tokenizers, bos_ids, beam_params, sampler_params,
+                 bert_names, config_detail, inp_lang='', tar_lang=''):
+        self.model = model
+        self.tokenizers = tokenizers
+        self.config_detail = tf.Variable(config_detail)
+        
+        self.inp_bos = bos_ids['inp']
+        self.tar_bos = bos_ids['tar']
+        self.beam_params = beam_params
+        self.sampler_params = sampler_params
+        
+        self.inp_bert = tf.Variable(bert_names['inp'] or '')        
+        self.tar_bert = tf.Variable(bert_names['tar'] or '')        
+        self.inp_lang = tf.Variable(inp_lang)
+        self.tar_lang = tf.Variable(tar_lang)     
+
+    # Notice: the input should be encoded as token_ids and masks, 
+    # and the signature need to be adjusted based on the number of masks
+    @tf.function(input_signature=[[tf.TensorSpec(shape=(None, None), dtype=tf.int32), 
+                                   tf.TensorSpec(shape=(None, None), dtype=tf.int32)],
+                                  tf.TensorSpec(shape=[], dtype=tf.int32)])
+    def __call__(self, inputs, max_length=64):
+        inp, inp_mask = inputs        
+        
+        # Initialization
+        initial_ids = tf.math.multiply(self.tar_bos, tf.ones_like(inp[:, 0]))
+        
+        # Create decoding cache based on the model structure
+        cache = {}
+        inp_embedded = self.model.inp_pretrained_model(inp, attention_mask=inp_mask, training=False)[0]
+        inp_embedded = self.model.embedding_projector(inp_embedded, training=False)
+        cache['encoder_outputs'], cache['inp_padding_mask'] = self.model.encoder(inp_embedded, mask=inp_mask, training=False)
+        cache['inp_padding_mask'] = tf.cast(cache['inp_padding_mask'], dtype=tf.float32)
+
+        # Update the max_decode_length in the parameters
+        self.beam_params['max_decode_length'] = max_length
+        self.sampler_params['max_decode_length'] = max_length
+        
+        # Decoder
+        ids = ids_decoder(initial_ids, cache, 'BeamSearch', self.beam_params, self.sampler_params)
+        output = tf.cast(ids, dtype=tf.int64)
+
+        # Detokenization
+        text = self.tokenizers.tar.detokenize(output)[0]
+        tokens = self.tokenizers.tar.lookup(output)[0]
+        
+        # recalculate attention_weights after sampling
+        output = tf.ensure_shape(ids, [None, None])        
+        _, attention_weights = self.model([inputs, output], training=False)      
+        
+        return text, tokens, attention_weights
+
+class HF2TFSeq2SeqPipeline(tf.Module):
+    def __init__(self, predictor_dir, pretrain_dir, preprocessors=None, tokenizer_params={}):
+        self.predictor = tf.saved_model.load(predictor_dir)
+        self.inp_lang = self.predictor.inp_lang.numpy().decode()        
+        self.tar_lang = self.predictor.tar_lang.numpy().decode()        
+        self.inp_bert = self.predictor.inp_bert.numpy().decode()        
+        self.tar_bert = self.predictor.tar_bert.numpy().decode() 
+        self.preprocessors = preprocessors
+        
+        # Only support input data now
+        self.bert_dir = os.path.join(pretrain_dir, self.inp_bert)
+        self.bert_config = AutoConfig.from_pretrained(self.inp_bert, cache_dir=self.bert_dir)
+        self.bert_tokenizer = AutoTokenizer.from_pretrained(self.inp_bert, cache_dir=self.bert_dir, do_lower_case=True)
+        self.bert_tokenizer_params = {
+            'add_special_tokens':True, 
+            'padding':True, 'truncation':True, 
+            'return_attention_mask':True, 'return_token_type_ids':False
+        }
+        for k, v in tokenizer_params.items():
+            self.bert_tokenizer_params[k] = v
+        
+    def __call__(self, sentence, max_lengths={'inp':128, 'tar':128}, return_attention=False):
+        # Set the maxmium length of input sentence
+        self.bert_tokenizer_params['max_length'] = max_lengths['inp']
+        
+        # Preprocessing : bert tokenizer cannot accept byte format so we should set py_function=True
+        if self.preprocessors:
+            sentence = self.preprocessors['inp'](sentence, py_function=True)
+
+        # Tokenization
+        tokens = self.bert_tokenizer(sentence, return_tensors='tf', **self.bert_tokenizer_params)            
+            
+        # Model Inference
+        text, tokens, attention_weights = self.predictor([tokens['input_ids'], tokens['attention_mask']], 
+                                                         max_length=tf.constant(max_lengths['tar']))
+
+        # Postprocessing
+        text = self.preprocessors['tar'](text.numpy().decode(), py_function=True)[0]
+        
+        if return_attention:
+            return text, [token.decode() for token in tokens.numpy()], attention_weights
+        else:
+            return text
+        
 ###################################################################################
 ########################### Natural Language Processing ###########################
 ###################################################################################
@@ -87,7 +228,10 @@ class ClassifierPredictor(tf.Module):
 
 def print_seq2seq(sentence, prediction, ground_truth=None):
     print(f'{"Input:":15s}: {sentence}')
-    print(f'{"Prediction":15s}: {prediction.numpy().decode("utf-8")}')
+    try:
+        print(f'{"Prediction":15s}: {prediction.numpy().decode("utf-8")}')
+    except:
+        print(f'{"Prediction":15s}: {prediction}')
     if ground_truth:
         print(f'{"Ground truth":15s}: {ground_truth}')
         
@@ -113,14 +257,13 @@ class Seq2SeqPredictor(tf.Module):
         # Setup the start and end token (here we only have tokenizers and no BOS or EOS)
         start_end = self.tokenizers.tar.tokenize([''])[0]
         start = start_end[0][tf.newaxis]
-        end   = start_end[1][tf.newaxis]
         
         # Initialization
         initial_ids = tf.cast(start, dtype=tf.int32)
 
         # Create decoding cache based on the model structure
         cache = {}
-        cache['encoder_outputs'], cache['inp_padding_mask'] = model.encoder(encoder_input)
+        cache['encoder_outputs'], cache['inp_padding_mask'] = self.model.encoder(encoder_input)
         cache['inp_padding_mask'] = tf.cast(cache['inp_padding_mask'], dtype=tf.float32)
 
         # Update the max_decode_length in the parameters
@@ -131,13 +274,11 @@ class Seq2SeqPredictor(tf.Module):
         ids = ids_decoder(initial_ids, cache, search_method, self.beam_params, self.sampler_params)
         output = tf.cast(ids, dtype=tf.int64)
 
-        # Detokenization
+        # Detokenization & Postprocessing
         text = self.tokenizers.tar.detokenize(output)[0]
-        tokens = self.tokenizers.tar.lookup(output)[0]
-
-        # Postprocessing
         text = self.preprocessors['tar'](text)
-        tokens = self.preprocessors['tar'](tokens)
+
+        tokens = self.tokenizers.tar.lookup(output)[0]
 
         # recalculate attention_weights after sampling
         output = tf.ensure_shape(output, [None, None])        
@@ -149,13 +290,14 @@ class Seq2SeqPipeline(tf.Module):
     def __init__(self, predictor):
         self.predictor = predictor
 
-    @tf.function(input_signature=[tf.TensorSpec(shape=[], dtype=tf.string)])
-    def __call__(self, sentence, max_length=64, search_method='BeamSearch'):
-        (result, 
+    @tf.function(input_signature=[tf.TensorSpec(shape=[], dtype=tf.string), 
+                                  tf.TensorSpec(shape=[], dtype=tf.int32)])
+    def __call__(self, sentence, max_length=64):
+        (text, 
          tokens,
-         attention_weights) = self.predictor(sentence, max_length=max_length, search_method=search_method)
+         attention_weights) = self.predictor(sentence, max_length=max_length, search_method='BeamSearch')
     
-        return result
+        return text
         
 ###################################################################################
 ################################# Video Processing ################################
