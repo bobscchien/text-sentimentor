@@ -45,7 +45,7 @@ def saveTFRecord(name, dir_tfrecord, dataset, shard=1):
         
 ### Load TFRecord
 
-def parse_example(example_proto, max_lengths, labeled=True):
+def parse_example(example_proto, labeled=True):
     # Create a dictionary describing the features.
     # Reference: https://www.google.com/search?q=tf.io.FixedLenSequenceFeature(&oq=tf.io.FixedLenSequenceFeature(&aqs=chrome..69i57&sourceid=chrome&ie=UTF-8
     feature_description = {
@@ -70,13 +70,19 @@ def parse_example(example_proto, max_lengths, labeled=True):
         return texts, labels
     return texts
 
-def loadTFRecord(filename, dir_tfrecord, max_lengths, batch_size=64, shuffle_size=None, cache=True, labeled=True):
-    dataset = tf.data.Dataset.list_files(os.path.join(dir_tfrecord, f'{filename}*.tfrecord'))
+def loadTFRecord(filename, dir_tfrecord, batch_size=64, shuffle_size=None, cache=True, labeled=True, input_context=None):
+    if input_context:
+        batch_size = input_context.get_per_replica_batch_size(batch_size)
+    dataset = tf.data.Dataset.list_files(os.path.join(dir_tfrecord, f'{filename}*.tfrecord'), shuffle=False)
+    if input_context:
+        # Be sure to shard before you use any randomizing operator (such as shuffle).
+        dataset = dataset.shard(num_shards=input_context.num_input_pipelines, 
+                                index=input_context.input_pipeline_id)
     dataset = dataset.interleave(tf.data.TFRecordDataset, num_parallel_calls=AUTOTUNE, deterministic=False,
                                  cycle_length=AUTOTUNE, block_length=1)
-    dataset = dataset.map(functools.partial(parse_example, max_lengths=max_lengths, labeled=labeled), 
-                          num_parallel_calls=AUTOTUNE, deterministic=None)
-    
+    dataset = dataset.map(functools.partial(parse_example, labeled=labeled), 
+                          num_parallel_calls=AUTOTUNE, deterministic=False)
+        
     if cache:
         dataset = dataset.cache()
     if shuffle_size:

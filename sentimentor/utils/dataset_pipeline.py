@@ -6,6 +6,16 @@ import tensorflow_datasets as tfds
 
 AUTOTUNE = tf.data.AUTOTUNE
 
+
+### Dataset Optimization
+
+# Experimental tf.data.experimental.OptimizationOptions that are disabled by default 
+# can in certain contexts -- such as when used together with tf.distribute 
+# -- cause a performance degradation. You should only enable them after you validate 
+# that they benefit the performance of your workload in a distribute setting.
+options = tf.data.Options()
+options.experimental_optimization.apply_default_optimizations = True
+
 ###################################################################################
 ############################### tensorflow tfrecord ###############################
 ###################################################################################
