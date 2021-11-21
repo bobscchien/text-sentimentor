@@ -4,10 +4,10 @@ from .transformer import *
 
 ### Hugging Face: https://blog.tensorflow.org/2019/11/hugging-face-state-of-art-natural.html
 
-import transformers
 import datasets
-
-from transformers import (pipeline, AutoConfig, AutoTokenizer, TFAutoModel, 
+import transformers
+from transformers import (AutoConfig, AutoTokenizer, BertTokenizerFast, 
+                          TFAutoModel, 
                           TFAutoModelForSequenceClassification, 
                           TFAutoModelForTokenClassification, 
                           TFAutoModelForQuestionAnswering)
@@ -25,8 +25,18 @@ BERT_NAMES = {
     },
     'zh':{
         'bert':['bert-base-chinese'],
+        'albert':['ckiplab/albert-tiny-chinese'],
+        'roberta':['hfl/chinese-roberta-wwm-ext']
     }
 }
+
+HF_TORCH_ONLY = ['ckiplab']
+
+def HFSelectTokenizer(bert_name):
+    if 'ckiplab' in bert_name:
+        return BertTokenizerFast
+    else:
+        return AutoTokenizer
 
 ###################################################################################
 ############################### tf-models-officials ###############################
@@ -117,7 +127,7 @@ class BertTransformerEncoder(tf.keras.Model):
         inp, inp_mask = inputs
                     
         # Bert Embedding 
-        inp_embedded = self.inp_pretrained_model(inp, attention_mask=inp_mask, training=False)[0]
+        inp_embedded = self.inp_pretrained_model(inp, attention_mask=inp_mask)[0]
         inp_embedded = self.embedding_projector(inp_embedded, training=training)
 
         # Encoder
@@ -178,7 +188,7 @@ class BertEncoderTransformer(tf.keras.Model):
         [inp, inp_mask], tar = inputs
                     
         # Bert Embedding 
-        inp_embedded = self.inp_pretrained_model(inp, attention_mask=inp_mask, training=training)[0]
+        inp_embedded = self.inp_pretrained_model(inp, attention_mask=inp_mask)[0]
         inp_embedded = self.embedding_projector(inp_embedded, training=training)
 
         # Encoder

@@ -2,7 +2,7 @@ import numpy as np
 import tensorflow as tf
 
 import official
-from official.nlp import modeling      # to use beam search (ops/beam_search.py), top-k/p sampling (ops/sampling_module) or built layers
+from official.nlp import modeling      # to sample (ops/beam_search.py, ops/ampling_module) or built layers
 from official.nlp import optimization  # to create AdamW optimizer
 from official.nlp.metrics import bleu as bleu_metric
 
@@ -18,6 +18,7 @@ valid_accuracy = tf.keras.metrics.Mean(name='val_accuracy')
 ### Loss & Accuracy Function
 
 loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
+accuracy_object = tf.keras.metrics.SparseCategoricalAccuracy()
 
 def loss_function(real, pred):
     mask = tf.math.not_equal(real, 0)
