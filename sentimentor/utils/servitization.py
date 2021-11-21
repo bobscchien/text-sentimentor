@@ -1,6 +1,7 @@
 import os
-from transformers import AutoConfig, AutoTokenizer
-from .decoding import *
+from transformers import AutoConfig
+from models.transformer_bert import HFSelectTokenizer
+from utils.decoding import *
 
 ###################################################################################
 ################################### Hugging Face ##################################
@@ -50,7 +51,9 @@ class HF2TFClassifierPipeline(tf.Module):
         
         self.bert_dir = os.path.join(pretrain_dir, self.inp_bert)
         self.bert_config = AutoConfig.from_pretrained(self.inp_bert, cache_dir=self.bert_dir)
-        self.bert_tokenizer = AutoTokenizer.from_pretrained(self.inp_bert, cache_dir=self.bert_dir, do_lower_case=True)
+        self.bert_tokenizer = HFSelectTokenizer(self.inp_bert).from_pretrained(self.inp_bert, 
+                                                                               cache_dir=self.bert_dir, 
+                                                                               do_lower_case=True)
         self.bert_tokenizer_params = {
             'add_special_tokens':True, 
             'padding':True, 'truncation':True, 
@@ -155,7 +158,9 @@ class HF2TFSeq2SeqPipeline(tf.Module):
         # Only support input data now
         self.bert_dir = os.path.join(pretrain_dir, self.inp_bert)
         self.bert_config = AutoConfig.from_pretrained(self.inp_bert, cache_dir=self.bert_dir)
-        self.bert_tokenizer = AutoTokenizer.from_pretrained(self.inp_bert, cache_dir=self.bert_dir, do_lower_case=True)
+        self.bert_tokenizer = HFSelectTokenizer(self.inp_bert).from_pretrained(self.inp_bert, 
+                                                                               cache_dir=self.bert_dir, 
+                                                                               do_lower_case=True)
         self.bert_tokenizer_params = {
             'add_special_tokens':True, 
             'padding':True, 'truncation':True, 
