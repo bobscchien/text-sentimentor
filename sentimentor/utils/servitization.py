@@ -123,7 +123,7 @@ class HF2TFSeq2SeqExporter(tf.Module):
         
         # Create decoding cache based on the model structure
         cache = {}
-        inp_embedded = self.model.inp_pretrained_model(inp, attention_mask=inp_mask, training=False)[0]
+        inp_embedded = self.model.inp_pretrained_model(inp, attention_mask=inp_mask)[0]
         inp_embedded = self.model.embedding_projector(inp_embedded, training=False)
         cache['encoder_outputs'], cache['inp_padding_mask'] = self.model.encoder(inp_embedded, mask=inp_mask, training=False)
         cache['inp_padding_mask'] = tf.cast(cache['inp_padding_mask'], dtype=tf.float32)
