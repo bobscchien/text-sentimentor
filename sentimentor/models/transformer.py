@@ -14,6 +14,8 @@ train_loss = tf.keras.metrics.Mean(name='loss')
 train_accuracy = tf.keras.metrics.Mean(name='accuracy')
 valid_loss = tf.keras.metrics.Mean(name='val_loss')
 valid_accuracy = tf.keras.metrics.Mean(name='val_accuracy')
+test_loss = tf.keras.metrics.Mean(name='test_loss')
+test_accuracy = tf.keras.metrics.Mean(name='test_accuracy')
 
 ### Loss & Accuracy Function
 
