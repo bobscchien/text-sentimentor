@@ -68,27 +68,22 @@ def parse_example(example_proto, labeled=True):
         labels = example['labels']
         return texts, labels
     return texts
-
+    
 def loadTFRecord(filename, dir_tfrecord, batch_size=64, shuffle_size=None, cache=True, labeled=True, input_context=None):
-    if input_context:
-        batch_size = input_context.get_per_replica_batch_size(batch_size)
-    dataset = tf.data.Dataset.list_files(os.path.join(dir_tfrecord, f'{filename}*.tfrecord'), shuffle=False)
-    if input_context:
-        # Be sure to shard before you use any randomizing operator (such as shuffle).
-        dataset = dataset.shard(num_shards=input_context.num_input_pipelines, 
-                                index=input_context.input_pipeline_id)
-    dataset = dataset.interleave(lambda file:tf.data.TFRecordDataset(file) \
-                                                    .map(functools.partial(parse_example, labeled=labeled),
+    fn_interleave = lambda file:tf.data.TFRecordDataset(file) \
+                                  .map(functools.partial(parse_example, labeled=labeled),
                                                          num_parallel_calls=AUTOTUNE, 
-                                                         deterministic=False),
-                                 num_parallel_calls=AUTOTUNE, deterministic=False,
-                                 cycle_length=AUTOTUNE, block_length=1)
-        
-    if cache:
-        dataset = dataset.cache()
-    if shuffle_size:
-        dataset = dataset.shuffle(shuffle_size)
-        
-    dataset = dataset.batch(batch_size, drop_remainder=True)
-    dataset = dataset.prefetch(buffer_size=AUTOTUNE)
+                                                         deterministic=False)
+    
+    dataset = tf.data.Dataset.list_files(os.path.join(dir_tfrecord, f'{filename}*.tfrecord'), shuffle=False)
+    dataset = make_batches(dataset, 
+                           batch_size=batch_size, 
+                           buffer_size=shuffle_size, 
+                           cache=cache, 
+                           fn_interleave=fn_interleave, 
+                           fn_before_cache=None, 
+                           fn_before_batch=None, 
+                           fn_before_prefetch=None,
+                           input_context=input_context)  
+                            
     return dataset

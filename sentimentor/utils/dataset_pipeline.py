@@ -10,8 +10,8 @@ AUTOTUNE = tf.data.AUTOTUNE
 ### Dataset Optimization
 
 # Experimental tf.data.experimental.OptimizationOptions that are disabled by default 
-# can in certain contexts -- such as when used together with tf.distribute 
-# -- cause a performance degradation. You should only enable them after you validate 
+# can in certain contexts -- such as when used together with tf.distribute -- 
+# cause a performance degradation. You should only enable them after you validate 
 # that they benefit the performance of your workload in a distribute setting.
 options = tf.data.Options()
 options.experimental_optimization.apply_default_optimizations = True
@@ -85,34 +85,23 @@ def setup_tfds_builder(builder, pcts, as_supervised=True):
 ############################### tensorflow pipeline ###############################
 ###################################################################################
 
-def loadTFDistributor(filename, dir_file, map_fn, batch_size=64, shuffle_size=None, cache=True, labeled=True, 
-                      input_context=None):
-    """ Load files and turn them into tf.data.Dataset object or tf.distribute.DistributedDataset
+def make_batches(dataset, batch_size=64, buffer_size=None, cache=True, 
+                 fn_interleave=None, fn_before_cache=None, fn_before_batch=None, fn_before_prefetch=None,
+                 input_context=None):
+    """ Make the dataset object into batches of Dataset or distributedDataset
     """
     if input_context:
         batch_size = input_context.get_per_replica_batch_size(batch_size)
-        
-    dataset = tf.data.Dataset.list_files(os.path.join(dir_file, filename), shuffle=False) 
-    if input_context:
         # Be sure to shard before you use any randomizing operator (such as shuffle).
         dataset = dataset.shard(num_shards=input_context.num_input_pipelines, 
-                                index=input_context.input_pipeline_id)
-    
-    dataset = dataset.map(map_fn, num_parallel_calls=AUTOTUNE, deterministic=False)
-
-    if cache:
-        dataset = dataset.cache()
-    if shuffle_size:
-        dataset = dataset.shuffle(shuffle_size)
+                                index=input_context.input_pipeline_id)   
         
-    dataset = dataset.batch(batch_size, drop_remainder=True)
-    dataset = dataset.prefetch(buffer_size=AUTOTUNE)
-    return dataset
-
-def make_batches(dataset, batch_size=64, buffer_size=None, cache=True, 
-                 fn_before_cache=None, fn_before_batch=None, fn_before_prefetch=None):
-    """ Make the dataset object into batches of data
-    """
+    # Parsing
+    if fn_interleave:   
+        dataset = dataset.interleave(fn_interleave,
+                                     num_parallel_calls=AUTOTUNE, deterministic=False,
+                                     cycle_length=AUTOTUNE, block_length=1)       
+        
     # Cache
     if fn_before_cache:
         dataset = dataset.map(fn_before_cache, num_parallel_calls=AUTOTUNE, deterministic=None)
@@ -135,6 +124,23 @@ def make_batches(dataset, batch_size=64, buffer_size=None, cache=True,
     
     return dataset
 
+def make_file_batches(filename, dir_file, batch_size=64, shuffle_size=None, cache=True, 
+                      fn_interleave=None, fn_before_cache=None, fn_before_batch=None, fn_before_prefetch=None,
+                      input_context=None):
+    """ Load files and turn them into tf.data.Dataset object or tf.distribute.DistributedDataset
+    """
+    dataset = tf.data.Dataset.list_files(os.path.join(dir_file, filename), shuffle=False) 
+    dataset = make_batches(dataset, 
+                           batch_size=batch_size, 
+                           buffer_size=shuffle_size, 
+                           cache=cache, 
+                           fn_interleave=fn_interleave, 
+                           fn_before_cache=fn_before_cache, 
+                           fn_before_batch=fn_before_batch, 
+                           fn_before_prefetch=fn_before_prefetch,
+                           input_context=input_context)    
+    return dataset
+
 def make_custom_token_pair_batches(dataset, tokenizers, max_lengths=None, 
                                    batch_size=64, buffer_size=None, cache=True):
 
@@ -150,7 +156,10 @@ def make_custom_token_pair_batches(dataset, tokenizers, max_lengths=None,
 
         # Pad sentence
         return tf.cast(inp, dtype=tf.int32).to_tensor(), tf.cast(tar, dtype=tf.int32).to_tensor()
-        #return inp.to_tensor(), tar.to_tensor()
     
-    return make_batches(dataset, batch_size, buffer_size, cache,
-                        fn_before_cache=None, fn_before_batch=None, fn_before_prefetch=tokenize_pairs)
+    if max_lengths:
+        return make_batches(dataset, batch_size, buffer_size, cache,
+                            fn_before_cache=tokenize_pairs, fn_before_batch=None, fn_before_prefetch=None)
+    else:
+        return make_batches(dataset, batch_size, buffer_size, cache,
+                            fn_before_cache=None, fn_before_batch=None, fn_before_prefetch=tokenize_pairs)
