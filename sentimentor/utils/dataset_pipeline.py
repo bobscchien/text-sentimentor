@@ -1,11 +1,11 @@
-from sklearn.model_selection import train_test_split
 import tensorflow as tf
 import tensorflow_datasets as tfds
+import os
+from sklearn.model_selection import train_test_split
 
 ### Autotune
 
 AUTOTUNE = tf.data.AUTOTUNE
-
 
 ### Dataset Optimization
 
@@ -85,9 +85,34 @@ def setup_tfds_builder(builder, pcts, as_supervised=True):
 ############################### tensorflow pipeline ###############################
 ###################################################################################
 
+def loadTFDistributor(filename, dir_file, map_fn, batch_size=64, shuffle_size=None, cache=True, labeled=True, 
+                      input_context=None):
+    """ Load files and turn them into tf.data.Dataset object or tf.distribute.DistributedDataset
+    """
+    if input_context:
+        batch_size = input_context.get_per_replica_batch_size(batch_size)
+        
+    dataset = tf.data.Dataset.list_files(os.path.join(dir_file, filename), shuffle=False) 
+    if input_context:
+        # Be sure to shard before you use any randomizing operator (such as shuffle).
+        dataset = dataset.shard(num_shards=input_context.num_input_pipelines, 
+                                index=input_context.input_pipeline_id)
+    
+    dataset = dataset.map(map_fn, num_parallel_calls=AUTOTUNE, deterministic=False)
+
+    if cache:
+        dataset = dataset.cache()
+    if shuffle_size:
+        dataset = dataset.shuffle(shuffle_size)
+        
+    dataset = dataset.batch(batch_size, drop_remainder=True)
+    dataset = dataset.prefetch(buffer_size=AUTOTUNE)
+    return dataset
+
 def make_batches(dataset, batch_size=64, buffer_size=None, cache=True, 
                  fn_before_cache=None, fn_before_batch=None, fn_before_prefetch=None):
-        
+    """ Make the dataset object into batches of data
+    """
     # Cache
     if fn_before_cache:
         dataset = dataset.map(fn_before_cache, num_parallel_calls=AUTOTUNE, deterministic=None)
@@ -101,7 +126,7 @@ def make_batches(dataset, batch_size=64, buffer_size=None, cache=True,
     # Batch
     if fn_before_batch:
         dataset = dataset.map(fn_before_batch, num_parallel_calls=AUTOTUNE, deterministic=None)
-    dataset = dataset.batch(batch_size)
+    dataset = dataset.batch(batch_size, drop_remainder=True)
     
     # Prefetch
     if fn_before_prefetch:

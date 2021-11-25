@@ -77,10 +77,12 @@ def loadTFRecord(filename, dir_tfrecord, batch_size=64, shuffle_size=None, cache
         # Be sure to shard before you use any randomizing operator (such as shuffle).
         dataset = dataset.shard(num_shards=input_context.num_input_pipelines, 
                                 index=input_context.input_pipeline_id)
-    dataset = dataset.interleave(tf.data.TFRecordDataset, num_parallel_calls=AUTOTUNE, deterministic=False,
+    dataset = dataset.interleave(lambda file:tf.data.TFRecordDataset(file) \
+                                                    .map(functools.partial(parse_example, labeled=labeled),
+                                                         num_parallel_calls=AUTOTUNE, 
+                                                         deterministic=False),
+                                 num_parallel_calls=AUTOTUNE, deterministic=False,
                                  cycle_length=AUTOTUNE, block_length=1)
-    dataset = dataset.map(functools.partial(parse_example, labeled=labeled), 
-                          num_parallel_calls=AUTOTUNE, deterministic=False)
         
     if cache:
         dataset = dataset.cache()
