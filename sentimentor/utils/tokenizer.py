@@ -47,6 +47,7 @@ def zh_preprocess(text, py_function=False):
                 '', sentence)
             # Pretrained bert tokenizers will handle the subwords so we don't add additional spaces among words
             # Replacing beginning, endding and multiple continuous spaces with a single space
+            sentence = re.sub("(?<=.)(?!$)", " ", sentence)
             sentence = re.sub(r"\s\s+", " ", sentence)
             sentence = sentence.strip()
             return sentence
@@ -65,7 +66,7 @@ def zh_preprocess(text, py_function=False):
         )
         # Adding a space amoung words to allow better tokenization 
         # (Therefore we don't need to replace words into spaces in the previous steps)
-        text = tf.strings.regex_replace(text, "[^\s0-9]", r" \0 ")
+        text = tf.strings.regex_replace(text, "[^\s]", r" \0 ")
         # Replacing beginning, endding and multiple continuous spaces with a single space
         text = tf.strings.regex_replace(text, r"\s\s+", " ")
         text = tf.strings.strip(text)
@@ -80,6 +81,8 @@ def en_preprocess(text, py_function=False):
             sentence = re.sub("<[^>]+>", " ", sentence)
             sentence = re.sub('[^a-z %s%s0-9]' % (re.escape(string.punctuation), zhon_punctuation), 
                               ' ', sentence)
+            # Add space between numbers to make tokenizer to only record 0-9            
+            sentence = re.sub("(?<=[0-9])(?!$)", " ", sentence)
             # Replacing beginning, endding and multiple continuous spaces with a single space
             sentence = re.sub(r"\s\s+", " ", sentence)
             sentence = sentence.strip()
@@ -94,6 +97,8 @@ def en_preprocess(text, py_function=False):
         text = tf.strings.regex_replace(text, 
                                         '[^a-z %s%s0-9]' % (re.escape(string.punctuation), zhon_punctuation), 
                                         ' ')
+        # Add space between numbers to make tokenizer to only record 0-9
+        text = tf.strings.regex_replace(text, "[0-9]", r" \0 ")
         # Replacing beginning, endding and multiple continuous spaces with a single space
         text = tf.strings.regex_replace(text, r"\s\s+", " ")
         text = tf.strings.strip(text)

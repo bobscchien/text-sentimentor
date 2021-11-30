@@ -85,7 +85,7 @@ def setup_tfds_builder(builder, pcts, as_supervised=True):
 ############################### tensorflow pipeline ###############################
 ###################################################################################
 
-def make_batches(dataset, batch_size=64, buffer_size=None, cache=True, 
+def make_batches(dataset, batch_size=None, buffer_size=None, cache=True, prefetch=True,
                  fn_interleave=None, fn_before_cache=None, fn_before_batch=None, fn_before_prefetch=None,
                  input_context=None):
     """ Make the dataset object into batches of Dataset or distributedDataset
@@ -115,16 +115,18 @@ def make_batches(dataset, batch_size=64, buffer_size=None, cache=True,
     # Batch
     if fn_before_batch:
         dataset = dataset.map(fn_before_batch, num_parallel_calls=AUTOTUNE, deterministic=None)
-    dataset = dataset.batch(batch_size, drop_remainder=True)
+    if batch_size:
+        dataset = dataset.batch(batch_size, drop_remainder=True)
     
     # Prefetch
     if fn_before_prefetch:
         dataset = dataset.map(fn_before_prefetch, num_parallel_calls=AUTOTUNE, deterministic=None)
-    dataset = dataset.prefetch(AUTOTUNE)    
+    if prefetch:
+        dataset = dataset.prefetch(AUTOTUNE)    
     
     return dataset
 
-def make_file_batches(filename, dir_file, batch_size=64, shuffle_size=None, cache=True, 
+def make_file_batches(filename, dir_file, batch_size=64, shuffle_size=None, cache=True, prefetch=True,
                       fn_interleave=None, fn_before_cache=None, fn_before_batch=None, fn_before_prefetch=None,
                       input_context=None):
     """ Load files and turn them into tf.data.Dataset object or tf.distribute.DistributedDataset
@@ -134,6 +136,7 @@ def make_file_batches(filename, dir_file, batch_size=64, shuffle_size=None, cach
                            batch_size=batch_size, 
                            buffer_size=shuffle_size, 
                            cache=cache, 
+                           prefetch=prefetch,
                            fn_interleave=fn_interleave, 
                            fn_before_cache=fn_before_cache, 
                            fn_before_batch=fn_before_batch, 
