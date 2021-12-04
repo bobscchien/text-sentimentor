@@ -1,9 +1,9 @@
 import re
 import string
-import pathlib
 import opencc
 
 import tqdm
+import pathlib
 import collections
 
 import tensorflow as tf
@@ -28,7 +28,9 @@ RESERVED_TOKENS = ["[PAD]", "[UNK]", "[START]", "[END]"]
 START = tf.argmax(tf.constant(RESERVED_TOKENS) == "[START]")
 END = tf.argmax(tf.constant(RESERVED_TOKENS) == "[END]")
 
-### text_preprocessor
+###################################################################################
+################################ text_preprocessor ################################
+###################################################################################
 
 # Given the punctuation list
 zhon_punctuation = "！＂＃＄％＆＇（）＊＋，－｡。／：；＜＝＞？＠［＼］＾＿｀｛｜｝～–….．､、《》〈〉｢｣「」『』【】〔〕‘'‛“”„‟"
@@ -112,7 +114,9 @@ text_preprocessors = {
   'en':en_preprocess
 }
 
-### Vocabularies Saving & Loading
+###################################################################################
+########################## Vocabularies Saving & Loading ##########################
+###################################################################################
 
 def write_vocab_file(filepath, vocab):
     with open(filepath, 'w') as f:
@@ -125,7 +129,9 @@ def load_vocab_file(filepath):
         vocab = f.read().splitlines()
     return vocab
 
-### Tokenization
+###################################################################################
+################################### Tokenization ##################################
+###################################################################################
 
 def build_bert_tokenizer(vocab_path, dataset, cjk=False,
                          bert_vocab_params={}, vocab_size=None, batch_size=1024, revocab=False):
