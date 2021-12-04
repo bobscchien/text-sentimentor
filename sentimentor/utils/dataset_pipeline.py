@@ -153,16 +153,13 @@ def make_custom_token_pair_batches(dataset, tokenizers, max_lengths=None,
         tar = tokenizers.tar.tokenize(tar)
         
         # Truncate sentence
-        if max_lengths:
+        if max_lengths['inp']:
             inp = inp[:, :max_lengths['inp']]
+        if max_lengths['tar']:
             tar = tar[:, :max_lengths['tar']]
 
         # Pad sentence
         return tf.cast(inp, dtype=tf.int32).to_tensor(), tf.cast(tar, dtype=tf.int32).to_tensor()
     
-    if max_lengths:
-        return make_batches(dataset, batch_size, buffer_size, cache,
-                            fn_before_cache=tokenize_pairs, fn_before_batch=None, fn_before_prefetch=None)
-    else:
-        return make_batches(dataset, batch_size, buffer_size, cache,
-                            fn_before_cache=None, fn_before_batch=None, fn_before_prefetch=tokenize_pairs)
+    return make_batches(dataset, batch_size, buffer_size, cache,
+                        fn_before_cache=None, fn_before_batch=None, fn_before_prefetch=tokenize_pairs)
