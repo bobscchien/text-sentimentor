@@ -266,5 +266,3 @@ class CustomTokenizer(tf.Module):
     @tf.function
     def get_reserved_tokens(self):
         return tf.constant(self._reserved_tokens)
-
-
