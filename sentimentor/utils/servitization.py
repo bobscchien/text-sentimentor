@@ -1,5 +1,6 @@
 import os
 from transformers import AutoConfig
+
 from models.transformer_bert import HFSelectTokenizer
 from utils.decoding import *
 
@@ -103,7 +104,9 @@ class HF2TFSeq2SeqExporter(tf.Module):
         self.inp_bos = bos_ids['inp']
         self.tar_bos = bos_ids['tar']
         self.beam_params = beam_params
+        self.beam_params['symbols_to_logits_fn'] = self.model.symbols_to_logits_fn
         self.sampler_params = sampler_params
+        self.sampler_params['symbols_to_logits_fn'] = self.model.symbols_to_logits_fn
         
         self.inp_bert = tf.Variable(bert_names['inp'] or '')        
         self.tar_bert = tf.Variable(bert_names['tar'] or '')        
@@ -246,7 +249,9 @@ class Seq2SeqPredictor(tf.Module):
         self.tokenizers = tokenizers
         self.model = model
         self.beam_params = beam_params
+        self.beam_params['symbols_to_logits_fn'] = self.model.symbols_to_logits_fn
         self.sampler_params = sampler_params
+        self.sampler_params['symbols_to_logits_fn'] = self.model.symbols_to_logits_fn
 
     def __call__(self, sentence, max_length=64, search_method='BeamSearch'):        
         assert isinstance(sentence, tf.Tensor)
