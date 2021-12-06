@@ -6,41 +6,13 @@ from official.nlp import modeling      # to sample (ops/beam_search.py, ops/ampl
 from official.nlp import optimization  # to create AdamW optimizer
 from official.nlp.metrics import bleu as bleu_metric
 
+import datasets
+
+from utils.decoding import *
+
 ###################################################################################
-#################################### Callbacks ####################################
+#################################### Optimizer ####################################
 ###################################################################################
-
-train_loss = tf.keras.metrics.Mean(name='loss')
-train_accuracy = tf.keras.metrics.Mean(name='accuracy')
-valid_loss = tf.keras.metrics.Mean(name='val_loss')
-valid_accuracy = tf.keras.metrics.Mean(name='val_accuracy')
-test_loss = tf.keras.metrics.Mean(name='test_loss')
-test_accuracy = tf.keras.metrics.Mean(name='test_accuracy')
-
-### Loss & Accuracy Function
-
-loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
-accuracy_object = tf.keras.metrics.SparseCategoricalAccuracy()
-
-def loss_function(real, pred):
-    mask = tf.math.not_equal(real, 0)
-    loss_ = loss_object(real, pred)
-
-    mask = tf.cast(mask, dtype=loss_.dtype)
-    loss_ *= mask
-
-    return tf.reduce_sum(loss_)/tf.reduce_sum(mask)
-
-def accuracy_function(real, pred):
-    accuracies = tf.equal(real, tf.argmax(pred, axis=2, output_type=tf.int32))
-
-    mask = tf.math.not_equal(real, 0)
-    accuracies = tf.math.logical_and(mask, accuracies)
-
-    mask = tf.cast(mask, dtype=tf.float32)
-    accuracies = tf.cast(accuracies, dtype=tf.float32)
-    
-    return tf.reduce_sum(accuracies)/tf.reduce_sum(mask)
 
 ### Optimization: can be replaced via tf-offical-models
 
@@ -259,6 +231,7 @@ class TransformerEncoder(tf.keras.layers.Layer):
         if self.embedding:
             # Use the built embedding layer
             inputs = self.embedding_layer(inputs) # (batch_size, input_seq_len, embed_dim)
+            
         ### Masking
             inp_padding_mask = tf.cast(inputs._keras_mask[:, tf.newaxis], tf.int32) # (batch_size, 1, inp_len)
         else:
@@ -337,7 +310,9 @@ class Transformer(tf.keras.Model):
     def __init__(self, num_layers, embed_dim, num_heads, dense_dim, 
                  input_vocab_size, target_vocab_size, pe_input, pe_target, 
                  activation='relu', dropout=0.1, embed_pos=False, embed_same=False):
-        super().__init__()
+        super(Transformer, self).__init__()
+                
+        ### Model Initialization
         
         self.embed_same = embed_same
         if self.embed_same:
@@ -353,6 +328,47 @@ class Transformer(tf.keras.Model):
                                           embed_pos, embedding=not embed_same)
 
         self.final_layer = tf.keras.layers.Dense(target_vocab_size)
+
+        ### Metric Trackers
+        
+        self.loss_tracker = tf.keras.metrics.Mean(name="loss")
+        self.accuracy_tracker = tf.keras.metrics.Mean(name="accuracy")
+    
+    @property
+    def metrics(self):
+        return [self.loss_tracker, self.accuracy_tracker]
+    
+    def compile(self, optimizer, loss_function=None, accuracy_function=None):
+        super(Transformer, self).compile()
+
+        if not loss_function:
+            
+            def loss_function(real, pred):
+                mask = tf.math.not_equal(real, 0)
+                loss_ = tf.keras.losses.SparseCategoricalCrossentropy(
+                    from_logits=True, reduction='none')(real, pred)
+
+                mask = tf.cast(mask, dtype=loss_.dtype)
+                loss_ *= mask
+
+                return tf.reduce_sum(loss_)/tf.reduce_sum(mask)
+       
+        if not accuracy_function:
+
+            def accuracy_function(real, pred):
+                accuracies = tf.equal(real, tf.argmax(pred, axis=2, output_type=tf.int32))
+
+                mask = tf.math.not_equal(real, 0)
+                accuracies = tf.math.logical_and(mask, accuracies)
+
+                mask = tf.cast(mask, dtype=tf.float32)
+                accuracies = tf.cast(accuracies, dtype=tf.float32)
+
+                return tf.reduce_sum(accuracies)/tf.reduce_sum(mask)
+         
+        self.optimizer = optimizer
+        self.loss_fn = loss_function
+        self.accuracy_fn = accuracy_function
 
     def call(self, inputs, training=None):
         # Keras models prefer if you pass all your inputs in the first argument
@@ -372,14 +388,107 @@ class Transformer(tf.keras.Model):
 
         return outputs, attention_weights
     
-    # The most convenient method to print model.summary() 
-    # similar to the sequential or functional API like.
+    def symbols_to_logits_fn(self, ids, index, cache):
+        """Define the logits function based on the model structure for sampler"""
+        
+        if self.embed_same:            
+            target_ids = self.embedding_layer(ids)
+        else:
+            target_ids = ids
+
+        decoder_outputs, attention_weights = self.decoder(
+            target_ids, cache['encoder_outputs'], cache['inp_padding_mask'], training=False)
+
+        logits = self.final_layer(decoder_outputs)[:, -1]
+
+        return logits, cache
+        
     def build_graph(self):
+        """
+        The most convenient method to print model.summary() similar to 
+        the sequential or functional API like.
+        """
         inp_ids = tf.keras.layers.Input(shape=(None,), name='input_ids', dtype='int32')
         tar_ids = tf.keras.layers.Input(shape=(None,), name='target_ids', dtype='int32')
         
         return tf.keras.Model(inputs=[inp_ids, tar_ids], outputs=self.call([inp_ids, tar_ids]))    
     
+    def train_step(self, dataset):
+        inp, tar = dataset
+
+        # For training process, using t-1~T-1 to as decoder inputs to predict t~T outputs.
+        # It is also known as teacher forcing.
+        tar_inp = tar[:, :-1]
+        tar_real = tar[:, 1:]
+
+        with tf.GradientTape() as tape:
+            tar_pred, _ = self.call([inp, tar_inp], training=True)
+            loss = self.loss_fn(tar_real, tar_pred)
+
+        gradients = tape.gradient(loss, self.trainable_variables)
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+        
+        self.loss_tracker.update_state(loss)
+        self.accuracy_tracker.update_state(self.accuracy_fn(tar_real, tar_pred))
+
+        return {
+            "loss": self.loss_tracker.result(),
+            "accuracy": self.accuracy_tracker.result(),
+        }
+        
+    def test_step(self, dataset):
+        inp, tar = dataset
+
+        # For training process, using t-1~T-1 to as decoder inputs to predict t~T outputs.
+        # It is also known as teacher forcing.
+        tar_inp = tar[:, :-1]
+        tar_real = tar[:, 1:]
+
+        tar_pred, _ = self.call([inp, tar_inp], training=False)
+        loss = self.loss_fn(tar_real, tar_pred)
+
+        self.loss_tracker.update_state(loss)
+        self.accuracy_tracker.update_state(self.accuracy_fn(tar_real, tar_pred))
+
+        return {
+            "loss": self.loss_tracker.result(),
+            "accuracy": self.accuracy_tracker.result(),
+        }
+    
+###################################################################################
+#################################### Callbacks ####################################
+###################################################################################
+
+class Seq2SeqMonitor(tf.keras.callbacks.Callback):
+    """A callback to generate and save images after each epoch"""
+
+    def __init__(self, test_texts, tokenizers, predict_step, num_examples=3):
+        self.test_texts = test_texts
+        self.tokenizers = tokenizers
+        self.predict_step = predict_step
+        self.num_examples = num_examples
+
+    def on_epoch_end(self, epoch, logs=None):
+        for dataset in self.test_texts.unbatch().batch(self.num_examples).take(1):
+            inp, tar = dataset
+            tar_pred = self.predict_step(self.model, dataset, tensor=True)
+            tar_pred = tf.cast(tar_pred, tf.int64)
+
+        pred_tokens = self.tokenizers.tar.detokenize(tar_pred)
+        pred_texts = [text.decode() for text in pred_tokens.numpy()]
+        real_tokens = self.tokenizers.tar.detokenize(tf.cast(tar, tf.int64))
+        real_texts = [text.decode() for text in real_tokens.numpy()]
+        try:
+            inp_tokens = self.tokenizers.inp.detokenize(tf.cast(inp, tf.int64))
+            inp_texts = [text.decode() for text in inp_tokens.numpy()]
+        except:
+            inp_texts = self.tokenizers.inp.batch_decode(tf.cast(inp[0], tf.int64), skip_special_tokens=True)
+            
+        for inp, real, pred in zip(inp_texts, real_texts, pred_texts):
+            print("\n    Input:", inp)
+            print("    Target:", real)
+            print("    Predict:", pred)
+
 ###################################################################################
 ###################################### Record #####################################
 ###################################################################################

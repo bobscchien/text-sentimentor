@@ -106,7 +106,7 @@ class BertTransformerEncoder(tf.keras.Model):
                                           activation=activation, dropout=dropout, embedding=False)
         
         if self.use_lstm:
-            self.nn_units /= 2
+            self.nn_units //= 2
             self.aggregate_layer = tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(self.nn_units, dropout=dropout))
         else:
             self.aggregate_layer = tf.keras.layers.GlobalMaxPool1D()
@@ -144,9 +144,11 @@ class BertTransformerEncoder(tf.keras.Model):
 
         return outputs
     
-    # The most convenient method to print model.summary() 
-    # similar to the sequential or functional API like.
     def build_graph(self):
+        """
+        The most convenient method to print model.summary() similar to 
+        the sequential or functional API like.
+        """
         inp_ids = tf.keras.layers.Input(shape=(None, ), name='input_ids', dtype='int32')
         inp_masks = tf.keras.layers.Input(shape=(None, ), name='attention_mask', dtype='int32') 
         
@@ -159,20 +161,22 @@ class BertEncoderTransformer(tf.keras.Model):
     def __init__(self, inp_pretrained_model, num_tune, num_projection_layers, 
                  num_enc_layers, num_dec_layers, embed_dim, num_heads, dense_dim, 
                  target_vocab_size, pe_target, activation='relu', dropout=0.1, embed_pos=False):
-        super().__init__()
+        super(BertEncoderTransformer, self).__init__()
         
+        ### Model Initialization
+
         self.num_tune = num_tune
 
-        ### Load pretrained bert model
+        # Load pretrained bert model
 
         self.inp_pretrained_model = inp_pretrained_model
         self.embedding_projector  = EmbeddingProjector(num_projection_layers, embed_dim, 
                                                        activation=activation, dropout=dropout)
         
-        ### Build the downstream model
+        # Build the downstream model
         
         self.encoder = TransformerEncoder(num_enc_layers, embed_dim, num_heads, dense_dim, 
-                                          activation=activation, dropout=dropout, embedding=False)
+                                          activation=activation, dropout=dropout, embed_pos=False, embedding=False)
         self.decoder = TransformerDecoder(num_dec_layers, embed_dim, num_heads, dense_dim, 
                                           target_vocab_size=target_vocab_size, maximum_position_encoding=pe_target,
                                           activation=activation, dropout=dropout, embed_pos=embed_pos, embedding=True)        
@@ -182,7 +186,48 @@ class BertEncoderTransformer(tf.keras.Model):
         # Whether the fine-tune process including the pretrained model
         for layer in self.inp_pretrained_model.layers[-self.num_tune:]:
             layer.trainable = bool(self.num_tune)
+
+        ### Metric Trackers
+        
+        self.loss_tracker = tf.keras.metrics.Mean(name="loss")
+        self.accuracy_tracker = tf.keras.metrics.Mean(name="accuracy")        
+        
+    @property
+    def metrics(self):
+        return [self.loss_tracker, self.accuracy_tracker]            
+
+    def compile(self, optimizer, loss_function=None, accuracy_function=None):
+        super(BertEncoderTransformer, self).compile()
+
+        if not loss_function:
             
+            def loss_function(real, pred):
+                mask = tf.math.not_equal(real, 0)
+                loss_ = tf.keras.losses.SparseCategoricalCrossentropy(
+                    from_logits=True, reduction='none')(real, pred)
+
+                mask = tf.cast(mask, dtype=loss_.dtype)
+                loss_ *= mask
+
+                return tf.reduce_sum(loss_)/tf.reduce_sum(mask)
+       
+        if not accuracy_function:
+
+            def accuracy_function(real, pred):
+                accuracies = tf.equal(real, tf.argmax(pred, axis=2, output_type=tf.int32))
+
+                mask = tf.math.not_equal(real, 0)
+                accuracies = tf.math.logical_and(mask, accuracies)
+
+                mask = tf.cast(mask, dtype=tf.float32)
+                accuracies = tf.cast(accuracies, dtype=tf.float32)
+
+                return tf.reduce_sum(accuracies)/tf.reduce_sum(mask)
+         
+        self.optimizer = optimizer
+        self.loss_fn = loss_function
+        self.accuracy_fn = accuracy_function
+        
     def call(self, inputs, training=None):
         # Keras models prefer if you pass all your inputs in the first argument
         [inp, inp_mask], tar = inputs
@@ -201,12 +246,68 @@ class BertEncoderTransformer(tf.keras.Model):
 
         return outputs, attention_weights
     
-    # The most convenient method to print model.summary() 
-    # similar to the sequential or functional API like.
+    def symbols_to_logits_fn(self, ids, index, cache):
+        """Define the logits function based on the model structure for sampler"""
+        target_ids = ids
+
+        decoder_outputs, attention_weights = self.decoder(
+            target_ids, cache['encoder_outputs'], cache['inp_padding_mask'], training=False)
+
+        logits = self.final_layer(decoder_outputs)[:, -1]
+
+        return logits, cache
+
     def build_graph(self):
+        """
+        The most convenient method to print model.summary() similar to 
+        the sequential or functional API like.
+        """
         inp_ids = tf.keras.layers.Input(shape=(None, ), name='input_ids', dtype='int32')
         inp_masks = tf.keras.layers.Input(shape=(None, ), name='attention_mask', dtype='int32') 
         tar_ids = tf.keras.layers.Input(shape=(None,), name='target_ids', dtype='int32')
         
         return tf.keras.Model(inputs=[[inp_ids, inp_masks], tar_ids], 
                               outputs=self.call([[inp_ids, inp_masks], tar_ids]))
+
+    def train_step(self, dataset):
+        inp, tar = dataset
+
+        # For training process, using t-1~T-1 to as decoder inputs to predict t~T outputs.
+        # It is also known as teacher forcing.
+        tar_inp = tar[:, :-1]
+        tar_real = tar[:, 1:]
+
+        with tf.GradientTape() as tape:
+            tar_pred, _ = self.call([inp, tar_inp], training=True)
+            loss = self.loss_fn(tar_real, tar_pred)
+
+        gradients = tape.gradient(loss, self.trainable_variables)
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+        
+        self.loss_tracker.update_state(loss)
+        self.accuracy_tracker.update_state(self.accuracy_fn(tar_real, tar_pred))
+
+        return {
+            "loss": self.loss_tracker.result(),
+            "accuracy": self.accuracy_tracker.result(),
+        }
+        
+    def test_step(self, dataset):
+        inp, tar = dataset
+
+        # For training process, using t-1~T-1 to as decoder inputs to predict t~T outputs.
+        # It is also known as teacher forcing.
+        tar_inp = tar[:, :-1]
+        tar_real = tar[:, 1:]
+
+        tar_pred, _ = self.call([inp, tar_inp], training=False)
+        loss = self.loss_fn(tar_real, tar_pred)
+
+        self.loss_tracker.update_state(loss)
+        self.accuracy_tracker.update_state(self.accuracy_fn(tar_real, tar_pred))
+
+        return {
+            "loss": self.loss_tracker.result(),
+            "accuracy": self.accuracy_tracker.result(),
+        }
+    
