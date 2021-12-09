@@ -44,7 +44,7 @@ def HFSelectTokenizer(bert_name):
 
 ### Embedding Projection
 
-# Further: bert adaptor for each attention weight
+# Further: BERT adaptor for each attention weight
 def embedding_projector(embeddings, num_projection_layers, projection_dim, activation, dropout):
     projected_embeddings = tf.keras.layers.Dense(units=projection_dim)(embeddings)
     for _ in range(num_projection_layers):
@@ -83,50 +83,71 @@ class EmbeddingProjector(tf.keras.layers.Layer):
             embeddings_projected = self.layernorm_layers[str(l)](x+embeddings_projected)
         return embeddings_projected
     
+### TransformerDecoder
+
+
+
 ### TransformerEncoder
 
 class BertTransformerEncoder(tf.keras.Model):
+    """ Use BERT model as the feature extractor for downstream model.
+    *** TODO:
+        1. finetune different layers
+        2. adapt different attention outputs
+      V 3. Compatible to token classification problem 
+        4. Compatible to multiple sentences classification problem ( build-graph as well )
+        5. Built-in metrics
+    """
     def __init__(self, inp_pretrained_model, num_tune, num_projection_layers, use_lstm, nn_units, 
-                 num_layers, embed_dim, num_heads, dense_dim, num_classes, activation='relu', dropout=0.1):
+                 num_layers, embed_dim, num_heads, dense_dim, num_classes, output_type='cls', activation='relu', dropout=0.1):
         super().__init__()
         
-        self.num_tune = num_tune
         self.use_lstm = use_lstm
         self.nn_units = nn_units
+        self.output_type = output_type
         
-        ### Load pretrained bert model
+        ### Load pretrained BERT model
 
         self.inp_pretrained_model = inp_pretrained_model
         self.embedding_projector  = EmbeddingProjector(num_projection_layers, embed_dim, 
                                                        activation=activation, dropout=dropout)
         
+        # Whether the fine-tune process including the pretrained model
+        for layer in self.inp_pretrained_model.layers[-num_tune:]:
+            layer.trainable = bool(num_tune)
+            
         ### Build the downstream model
         
         self.encoder = TransformerEncoder(num_layers, embed_dim, num_heads, dense_dim, 
                                           activation=activation, dropout=dropout, embedding=False)
         
-        if self.use_lstm:
-            self.nn_units //= 2
-            self.aggregate_layer = tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(self.nn_units, dropout=dropout))
-        else:
-            self.aggregate_layer = tf.keras.layers.GlobalMaxPool1D()
-            
+        if self.output_type == 'cls':
+            if self.use_lstm:
+                self.nn_units //= 2
+                self.aggregate_layer = tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(
+                    self.nn_units, dropout=dropout))
+            else:
+                self.aggregate_layer = tf.keras.layers.GlobalMaxPool1D()
+        elif self.output_type == 'seq':
+            if self.use_lstm:
+                self.nn_units //= 2
+                self.aggregate_layer = tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(
+                    self.nn_units, dropout=dropout, return_sequences=True))
+            else:
+                self.aggregate_layer = None
+
+        self.dense_layer = tf.keras.layers.Dense(self.nn_units, activation=activation)            
         self.dropout_layer = tf.keras.layers.Dropout(dropout)                
-        self.dense_layer = tf.keras.layers.Dense(self.nn_units, activation=activation)
         
         if num_classes <= 2:
             num_classes = 1
         self.final_layer = tf.keras.layers.Dense(num_classes, activation=None)
-        
-        # Whether the fine-tune process including the pretrained model
-        for layer in self.inp_pretrained_model.layers[-self.num_tune:]:
-            layer.trainable = bool(self.num_tune)
             
     def call(self, inputs, training=None):
         # Keras models prefer if you pass all your inputs in the first argument
         inp, inp_mask = inputs
                     
-        # Bert Embedding 
+        # BERT Embedding 
         inp_embedded = self.inp_pretrained_model(inp, attention_mask=inp_mask)[0]
         inp_embedded = self.embedding_projector(inp_embedded, training=training)
 
@@ -134,10 +155,14 @@ class BertTransformerEncoder(tf.keras.Model):
         enc_outputs, _ = self.encoder(inp_embedded, mask=inp_mask, training=training)    
 
         # Output
-        if self.use_lstm:
-            x = self.aggregate_layer(enc_outputs, training=training)
+        if self.aggregate_layer:
+            if self.use_lstm:
+                x = self.aggregate_layer(enc_outputs, training=training)
+            else:
+                x = self.aggregate_layer(enc_outputs)
         else:
-            x = self.aggregate_layer(enc_outputs)
+            x = enc_outputs
+    
         x = self.dense_layer(x)
         x = self.dropout_layer(x, training=training)
         outputs = self.final_layer(x)
@@ -152,28 +177,34 @@ class BertTransformerEncoder(tf.keras.Model):
         inp_ids = tf.keras.layers.Input(shape=(None, ), name='input_ids', dtype='int32')
         inp_masks = tf.keras.layers.Input(shape=(None, ), name='attention_mask', dtype='int32') 
         
-        return tf.keras.Model(inputs=[inp_ids, inp_masks], 
-                              outputs=self.call([inp_ids, inp_masks]))
+        inputs = [inp_ids, inp_masks]
+        
+        return tf.keras.Model(inputs=inputs, outputs=self.call(inputs))
 
 ### Transformer
 
 class BertEncoderTransformer(tf.keras.Model):
+    """ Use BERT model as the feature extractor of input sequences for downstream model.
+    *** TODO:
+        1. finetune different layers
+        2. adapt different attention outputs
+    """
     def __init__(self, inp_pretrained_model, num_tune, num_projection_layers, 
                  num_enc_layers, num_dec_layers, embed_dim, num_heads, dense_dim, 
                  target_vocab_size, pe_target, activation='relu', dropout=0.1, embed_pos=False):
         super(BertEncoderTransformer, self).__init__()
         
-        ### Model Initialization
-
-        self.num_tune = num_tune
-
-        # Load pretrained bert model
+        ### Load pretrained BERT model
 
         self.inp_pretrained_model = inp_pretrained_model
         self.embedding_projector  = EmbeddingProjector(num_projection_layers, embed_dim, 
                                                        activation=activation, dropout=dropout)
         
-        # Build the downstream model
+        # Whether the fine-tune process including the pretrained model
+        for layer in self.inp_pretrained_model.layers[-num_tune:]:
+            layer.trainable = bool(num_tune)
+            
+        ### Build the downstream model
         
         self.encoder = TransformerEncoder(num_enc_layers, embed_dim, num_heads, dense_dim, 
                                           activation=activation, dropout=dropout, embed_pos=False, embedding=False)
@@ -182,10 +213,6 @@ class BertEncoderTransformer(tf.keras.Model):
                                           activation=activation, dropout=dropout, embed_pos=embed_pos, embedding=True)        
         
         self.final_layer = tf.keras.layers.Dense(target_vocab_size)
-        
-        # Whether the fine-tune process including the pretrained model
-        for layer in self.inp_pretrained_model.layers[-self.num_tune:]:
-            layer.trainable = bool(self.num_tune)
 
         ### Metric Trackers
         
@@ -232,7 +259,7 @@ class BertEncoderTransformer(tf.keras.Model):
         # Keras models prefer if you pass all your inputs in the first argument
         [inp, inp_mask], tar = inputs
                     
-        # Bert Embedding 
+        # BERT Embedding 
         inp_embedded = self.inp_pretrained_model(inp, attention_mask=inp_mask)[0]
         inp_embedded = self.embedding_projector(inp_embedded, training=training)
 
