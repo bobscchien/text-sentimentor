@@ -143,7 +143,7 @@ def point_wise_feed_forward_network(embed_dim, dense_dim, activation='relu'):
 ### TransformerEncoder layer 
 
 class TransformerEncoderLayer(tf.keras.layers.Layer):
-    def __init__(self, embed_dim, num_heads, dense_dim, activation='relu', dropout=0.1):
+    def __init__(self, embed_dim, num_heads, dense_dim, activation='relu', dropout=0.1, cross_attention=False):
         super(TransformerEncoderLayer, self).__init__()
 
         self.mha = tf.keras.layers.MultiHeadAttention(num_heads=num_heads, key_dim=embed_dim)
@@ -169,36 +169,47 @@ class TransformerEncoderLayer(tf.keras.layers.Layer):
 ### TransformerDecoder Layer
 
 class TransformerDecoderLayer(tf.keras.layers.Layer):
-    def __init__(self, embed_dim, num_heads, dense_dim, activation='relu', dropout=0.1):
+    def __init__(self, embed_dim, num_heads, dense_dim, activation='relu', dropout=0.1, cross_attention=True):
         super(TransformerDecoderLayer, self).__init__()
 
+        self.cross_attention = cross_attention
+        
         self.mha1 = tf.keras.layers.MultiHeadAttention(num_heads=num_heads, key_dim=embed_dim)
-        self.mha2 = tf.keras.layers.MultiHeadAttention(num_heads=num_heads, key_dim=embed_dim)
         self.ffn = point_wise_feed_forward_network(embed_dim, dense_dim, activation)
 
         self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
-        self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
         self.layernorm3 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
 
         self.dropout1 = tf.keras.layers.Dropout(dropout)
-        self.dropout2 = tf.keras.layers.Dropout(dropout)
         self.dropout3 = tf.keras.layers.Dropout(dropout)
+
+        if self.cross_attention:
+            self.mha2 = tf.keras.layers.MultiHeadAttention(num_heads=num_heads, key_dim=embed_dim)
+            self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+            self.dropout2 = tf.keras.layers.Dropout(dropout)
 
     def call(self, inputs, encoder_outputs, combined_mask=None, inp_padding_mask=None, training=None):
         # encoder_outputs.shape == (batch_size, input_seq_len, embed_dim)
     
+        ### Self attention
         attn1, attn_weights_block1 = self.mha1(query=inputs, value=inputs, key=inputs, 
                                                attention_mask=combined_mask, 
                                                return_attention_scores=True)
         attn1 = self.dropout1(attn1, training=training)
         out1 = self.layernorm1(attn1 + inputs) # (batch_size, target_seq_len, embed_dim)
         
-        attn2, attn_weights_block2 = self.mha2(query=out1, value=encoder_outputs, key=encoder_outputs,
-                                               attention_mask=inp_padding_mask,
-                                               return_attention_scores=True)
-        attn2 = self.dropout2(attn2, training=training)
-        out2 = self.layernorm2(attn2 + out1)   # (batch_size, target_seq_len, embed_dim)
+        ### Cross attention
+        if self.cross_attention:
+            attn2, attn_weights_block2 = self.mha2(query=out1, value=encoder_outputs, key=encoder_outputs,
+                                                   attention_mask=inp_padding_mask,
+                                                   return_attention_scores=True)
+            attn2 = self.dropout2(attn2, training=training)
+            out2 = self.layernorm2(attn2 + out1)   # (batch_size, target_seq_len, embed_dim)
+        else:
+            attn_weights_block2 = None
+            out2 = out1
 
+        ### FFN
         ffn_output = self.ffn(out2)  # (batch_size, target_seq_len, embed_dim)
         ffn_output = self.dropout3(ffn_output, training=training)
         out3 = self.layernorm3(ffn_output + out2)  # (batch_size, target_seq_len, embed_dim)
@@ -249,7 +260,7 @@ class TransformerEncoder(tf.keras.layers.Layer):
 class TransformerDecoder(tf.keras.layers.Layer):
     def __init__(self, num_layers, embed_dim, num_heads, dense_dim, 
                  target_vocab_size=None, maximum_position_encoding=None, activation='relu', dropout=0.1, 
-                 embed_pos=False, embedding=True):
+                 embed_pos=False, embedding=True, cross_attention=True):
         super(TransformerDecoder, self).__init__()
 
         self.embedding = embedding        
@@ -261,7 +272,7 @@ class TransformerDecoder(tf.keras.layers.Layer):
                                                              target_vocab_size, 
                                                              embed_dim, 
                                                              embed_pos)
-        self.dec_layers = [TransformerDecoderLayer(embed_dim, num_heads, dense_dim, activation, dropout)
+        self.dec_layers = [TransformerDecoderLayer(embed_dim, num_heads, dense_dim, activation, dropout, cross_attention)
                            for _ in range(num_layers)]
         self.dropout = tf.keras.layers.Dropout(dropout)
 
@@ -411,7 +422,9 @@ class Transformer(tf.keras.Model):
         inp_ids = tf.keras.layers.Input(shape=(None,), name='input_ids', dtype='int32')
         tar_ids = tf.keras.layers.Input(shape=(None,), name='target_ids', dtype='int32')
         
-        return tf.keras.Model(inputs=[inp_ids, tar_ids], outputs=self.call([inp_ids, tar_ids]))    
+        inputs = [inp_ids, tar_ids]
+        
+        return tf.keras.Model(inputs=inputs, outputs=self.call(inputs))    
     
     def train_step(self, dataset):
         inp, tar = dataset
