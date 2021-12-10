@@ -293,8 +293,10 @@ class BertEncoderTransformer(tf.keras.Model):
         inp_masks = tf.keras.layers.Input(shape=(None, ), name='attention_mask', dtype='int32') 
         tar_ids = tf.keras.layers.Input(shape=(None,), name='target_ids', dtype='int32')
         
-        return tf.keras.Model(inputs=[[inp_ids, inp_masks], tar_ids], 
-                              outputs=self.call([[inp_ids, inp_masks], tar_ids]))
+        inputs = [[inp_ids, inp_masks], tar_ids]
+        
+        return tf.keras.Model(inputs=inputs, 
+                              outputs=self.call(inputs))
 
     def train_step(self, dataset):
         inp, tar = dataset
