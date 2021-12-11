@@ -85,7 +85,160 @@ class EmbeddingProjector(tf.keras.layers.Layer):
     
 ### TransformerDecoder
 
+class GptTransformerDecoder(tf.keras.Model):
+    """ Use transformer decoder as a language model
+    *** TODO:
+        1. define GPT pretrained model as feature extractor
+    """
+    def __init__(self, tar_pretrained_model, num_tune, num_projection_layers, 
+                 num_layers, embed_dim, num_heads, dense_dim, 
+                 target_vocab_size, pe_target, activation='relu', dropout=0.1, embed_pos=False):
+        super(GptTransformerDecoder, self).__init__()
+        
+        self.embedding = False if tar_pretrained_model else True
+                
+        ### Load pretrained GPT model
 
+        if self.embedding:
+            self.tar_pretrained_model = None
+            self.embedding_projector = None
+        else:
+            self.tar_pretrained_model = tar_pretrained_model
+            self.embedding_projector = EmbeddingProjector(num_projection_layers, embed_dim, 
+                                                          activation=activation, dropout=dropout)
+            # Whether the fine-tune process including the pretrained model
+            for layer in self.tar_pretrained_model.layers[-num_tune:]:
+                layer.trainable = bool(num_tune)
+
+        ### Build the downstream model
+        
+        self.decoder = TransformerDecoder(num_layers, embed_dim, num_heads, dense_dim, 
+                                          target_vocab_size=target_vocab_size, maximum_position_encoding=pe_target,
+                                          activation=activation, dropout=dropout, 
+                                          embed_pos=embed_pos, embedding=self.embedding, cross_attention=False)        
+
+        self.final_layer = tf.keras.layers.Dense(target_vocab_size)
+        
+        ### Metric Trackers
+        
+        self.loss_tracker = tf.keras.metrics.Mean(name="loss")
+        self.accuracy_tracker = tf.keras.metrics.Mean(name="accuracy")
+    
+    @property
+    def metrics(self):
+        return [self.loss_tracker, self.accuracy_tracker]            
+
+    def compile(self, optimizer, loss_function=None, accuracy_function=None):
+        super(GptTransformerDecoder, self).compile()
+
+        if not loss_function:
+            
+            def loss_function(real, pred):
+                mask = tf.math.not_equal(real, 0)
+                loss_ = tf.keras.losses.SparseCategoricalCrossentropy(
+                    from_logits=True, reduction='none')(real, pred)
+
+                mask = tf.cast(mask, dtype=loss_.dtype)
+                loss_ *= mask
+
+                return tf.reduce_sum(loss_)/tf.reduce_sum(mask)
+       
+        if not accuracy_function:
+
+            def accuracy_function(real, pred):
+                accuracies = tf.equal(real, tf.argmax(pred, axis=2, output_type=tf.int32))
+
+                mask = tf.math.not_equal(real, 0)
+                accuracies = tf.math.logical_and(mask, accuracies)
+
+                mask = tf.cast(mask, dtype=tf.float32)
+                accuracies = tf.cast(accuracies, dtype=tf.float32)
+
+                return tf.reduce_sum(accuracies)/tf.reduce_sum(mask)
+         
+        self.optimizer = optimizer
+        self.loss_fn = loss_function
+        self.accuracy_fn = accuracy_function
+
+    def call(self, inputs, training=None):
+        # Keras models prefer if you pass all your inputs in the first argument
+        tar = inputs
+                    
+        # GPT Embedding 
+        #if not self.embedding:
+        #    tar = self.tar_pretrained_model(tar, attention_mask=tar_mask)[0]
+        #    tar = self.embedding_projector(tar, training=training)
+
+        # Decoder
+        dec_outputs, attention_weights = self.decoder(tar, None, None, training=training)
+
+        # Output
+        outputs = self.final_layer(dec_outputs)
+
+        return outputs
+    
+    def symbols_to_logits_fn(self, ids, index, cache):
+        """Define the logits function based on the model structure for sampler"""
+        target_ids = ids
+
+        decoder_outputs = self.decoder(target_ids, None, None, training=False)
+
+        logits = self.final_layer(decoder_outputs)[:, -1]
+
+        return logits, cache 
+    
+    def build_graph(self):
+        """
+        The most convenient method to print model.summary() similar to 
+        the sequential or functional API like.
+        """
+        inp_ids = tf.keras.layers.Input(shape=(None, ), name='input_ids', dtype='int32')
+        
+        inputs = inp_ids
+        
+        return tf.keras.Model(inputs=inputs, outputs=self.call(inputs))
+    
+    def train_step(self, dataset):
+        tar = dataset
+
+        # For training process, using t-1~T-1 to as decoder inputs to predict t~T outputs.
+        # It is also known as teacher forcing.
+        tar_inp = tar[:, :-1]
+        tar_real = tar[:, 1:]
+
+        with tf.GradientTape() as tape:
+            tar_pred = self.call(tar_inp, training=True)
+            loss = self.loss_fn(tar_real, tar_pred)
+
+        gradients = tape.gradient(loss, self.trainable_variables)
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+        
+        self.loss_tracker.update_state(loss)
+        self.accuracy_tracker.update_state(self.accuracy_fn(tar_real, tar_pred))
+
+        return {
+            "loss": self.loss_tracker.result(),
+            "accuracy": self.accuracy_tracker.result(),
+        }
+    
+    def test_step(self, dataset):
+        tar = dataset
+
+        # For training process, using t-1~T-1 to as decoder inputs to predict t~T outputs.
+        # It is also known as teacher forcing.
+        tar_inp = tar[:, :-1]
+        tar_real = tar[:, 1:]
+
+        tar_pred = self.call(tar_inp, training=False)
+        loss = self.loss_fn(tar_real, tar_pred)
+        
+        self.loss_tracker.update_state(loss)
+        self.accuracy_tracker.update_state(self.accuracy_fn(tar_real, tar_pred))
+
+        return {
+            "loss": self.loss_tracker.result(),
+            "accuracy": self.accuracy_tracker.result(),
+        }
 
 ### TransformerEncoder
 
