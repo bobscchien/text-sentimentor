@@ -99,11 +99,10 @@ class GptTransformerDecoder(tf.keras.Model):
                 
         ### Load pretrained GPT model
 
+        self.tar_pretrained_model = tar_pretrained_model
         if self.embedding:
-            self.tar_pretrained_model = None
             self.embedding_projector = None
         else:
-            self.tar_pretrained_model = tar_pretrained_model
             self.embedding_projector = EmbeddingProjector(num_projection_layers, embed_dim, 
                                                           activation=activation, dropout=dropout)
             # Whether the fine-tune process including the pretrained model
@@ -175,13 +174,13 @@ class GptTransformerDecoder(tf.keras.Model):
         # Output
         outputs = self.final_layer(dec_outputs)
 
-        return outputs
+        return outputs, attention_weights
     
     def symbols_to_logits_fn(self, ids, index, cache):
         """Define the logits function based on the model structure for sampler"""
         target_ids = ids
 
-        decoder_outputs = self.decoder(target_ids, None, None, training=False)
+        decoder_outputs, attention_weights = self.decoder(target_ids, None, None, training=False)
 
         logits = self.final_layer(decoder_outputs)[:, -1]
 
@@ -207,7 +206,7 @@ class GptTransformerDecoder(tf.keras.Model):
         tar_real = tar[:, 1:]
 
         with tf.GradientTape() as tape:
-            tar_pred = self.call(tar_inp, training=True)
+            tar_pred, _ = self.call(tar_inp, training=True)
             loss = self.loss_fn(tar_real, tar_pred)
 
         gradients = tape.gradient(loss, self.trainable_variables)
@@ -229,7 +228,7 @@ class GptTransformerDecoder(tf.keras.Model):
         tar_inp = tar[:, :-1]
         tar_real = tar[:, 1:]
 
-        tar_pred = self.call(tar_inp, training=False)
+        tar_pred, _ = self.call(tar_inp, training=False)
         loss = self.loss_fn(tar_real, tar_pred)
         
         self.loss_tracker.update_state(loss)
